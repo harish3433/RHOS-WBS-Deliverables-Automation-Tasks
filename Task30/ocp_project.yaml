@@ -1,0 +1,66 @@
+---
+- name: Create OpenShift Project with Quotas, Limits, and RoleBindings
+  hosts: localhost
+  gather_facts: no
+  vars:
+    project_name: myproject
+    quota_cpu: "2"
+    quota_mem: "4Gi"
+  tasks:
+    - name: Create Project (Namespace)
+      kubernetes.core.k8s:
+        state: present
+        kind: Namespace
+        name: "{{ project_name }}"
+
+    - name: Apply ResourceQuota
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ResourceQuota
+          metadata:
+            name: "{{ project_name }}-quota"
+            namespace: "{{ project_name }}"
+          spec:
+            hard:
+              cpu: "{{ quota_cpu }}"
+              memory: "{{ quota_mem }}"
+              pods: "10"
+
+    - name: Apply LimitRange
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: LimitRange
+          metadata:
+            name: "{{ project_name }}-limits"
+            namespace: "{{ project_name }}"
+          spec:
+            limits:
+              - type: Container
+                default:
+                  cpu: "500m"
+                  memory: "256Mi"
+                defaultRequest:
+                  cpu: "250m"
+                  memory: "128Mi"
+
+    - name: Bind admin role to user 'developer'
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: admin-binding
+            namespace: "{{ project_name }}"
+          subjects:
+            - kind: User
+              name: developer
+              apiGroup: rbac.authorization.k8s.io
+          roleRef:
+            kind: ClusterRole
+            name: admin
+            apiGroup: rbac.authorization.k8s.io
