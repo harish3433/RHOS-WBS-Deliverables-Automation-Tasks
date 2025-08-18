@@ -1,0 +1,38 @@
+---
+- name: Check and Advise on new Red Hat ODF version updates
+  hosts: localhost
+  gather_facts: no
+  vars:
+    odf_namespace: "openshift-storage"
+    odf_package_name: "odf-operator"       # Change to 'ocs-operator' if you use that
+    marketplace_namespace: "openshift-marketplace"
+
+  tasks:
+    - name: Get installed ODF CSV version
+      ansible.builtin.shell: >
+        oc get csv -n {{ odf_namespace }} -o jsonpath='{.items[0].spec.version}'
+      register: installed
+      changed_when: false
+
+    - name: Get latest available version from OperatorHub
+      ansible.builtin.shell: >
+        oc get packagemanifest {{ odf_package_name }} -n {{ marketplace_namespace }}
+        -o json | jq -r '.status.channels[].currentCSVDesc.version' | sort -Vr | head -1
+      register: latest
+      changed_when: false
+
+    - name: Show versions
+      ansible.builtin.debug:
+        msg: "Installed: {{ installed.stdout }}, Latest Available: {{ latest.stdout }}"
+
+    - name: Advise on upgrade
+      ansible.builtin.debug:
+        msg: >
+          ⚠️ Update available from {{ installed.stdout }} → {{ latest.stdout }}.
+          Please review release notes before upgrading.
+      when: installed.stdout != latest.stdout
+
+    - name: Already up to date
+      ansible.builtin.debug:
+        msg: "✅ ODF is already up to date."
+      when: installed.stdout == latest.stdout
