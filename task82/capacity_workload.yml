@@ -1,0 +1,143 @@
+---
+- name: Generate Cluster Utilization Report (Usage • Requests • Limits vs Capacity)
+  hosts: localhost
+  gather_facts: no
+  vars:
+    prometheus_url: "https://prometheus-k8s-openshift-monitoring.apps.prince-cluster.ocp02.demo"
+    token: "{{ lookup('pipe', 'oc create token prometheus-k8s -n openshift-monitoring') }}"
+    report_file: "cluster_utilization_report_{{ lookup('pipe','date +%F') }}.txt"
+    # 5m window for "current" CPU usage smoothing
+    cpu_rate_window: "5m"
+
+  tasks:
+    - name: Init report file
+      copy:
+        dest: "{{ report_file }}"
+        content: |
+          Cluster Resource Utilization Report
+          ------------------------------------------------------------------
+          Scope: All workloads (cluster-wide totals)
+          Time:  {{ lookup('pipe','date -Is') }}
+          Window (CPU rate): {{ cpu_rate_window }}
+          Notes:
+            - CPU units are cores. Memory/Storage are bytes (GiB shown below).
+            - Storage has no "limits" concept; we show requests and usage vs PV capacity.
+          ------------------------------------------------------------------
+
+    # -------- Capacity (authoritatimachine_cpu_coresmuve kube-state-metrics series) --------
+    - name: Get CPU capacity (cores)
+      shell: |
+        curl -k -sG -H "Authorization: Bearer {{ token }}" \
+        --data-urlencode "query=sum(machine_cpu_cores)" \
+        "{{ prometheus_url }}/api/v1/query" | jq -r '.data.result[0].value[1] // "0"'
+      register: cpu_capacity
+
+    - name: Get Memory capacity (bytes)
+      shell: |
+        curl -k -sG -H "Authorization: Bearer {{ token }}" \
+        --data-urlencode "query=sum(machine_memory_bytes)" \
+        "{{ prometheus_url }}/api/v1/query" | jq -r '.data.result[0].value[1] // "0"'
+      register: mem_capacity
+
+    - name: Get PV storage capacity (bytes)
+      shell: |
+        curl -k -sG -H "Authorization: Bearer {{ token }}" \
+        --data-urlencode "query=sum(kube_persistentvolume_capacity_bytes)" \
+        "{{ prometheus_url }}/api/v1/query" | jq -r '.data.result[0].value[1] // "0"'
+      register: storage_capacity
+
+    # -------- Current usage --------
+    - name: Get CPU usage (cores, rate over window)
+      shell: |
+        curl -k -sG -H "Authorization: Bearer {{ token }}" \
+        --data-urlencode "query=sum(rate(container_cpu_usage_seconds_total{container!='',container!='POD'}[{{ cpu_rate_window }}]))" \
+        "{{ prometheus_url }}/api/v1/query" | jq -r '.data.result[0].value[1] // "0"'
+      register: cpu_usage
+
+    - name: Get Memory usage (bytes, working set)
+      shell: |
+        curl -k -sG -H "Authorization: Bearer {{ token }}" \
+        --data-urlencode "query=sum(container_memory_working_set_bytes{container!='',container!='POD'})" \
+        "{{ prometheus_url }}/api/v1/query" | jq -r '.data.result[0].value[1] // "0"'
+      register: mem_usage
+
+    - name: Get Storage usage (bytes, from kubelet volume stats)
+      shell: |
+        curl -k -sG -H "Authorization: Bearer {{ token }}" \
+        --data-urlencode "query=sum(kubelet_volume_stats_used_bytes)" \
+        "{{ prometheus_url }}/api/v1/query" | jq -r '.data.result[0].value[1] // "0"'
+      register: storage_usage
+
+    # -------- Workload allocations (requests & limits) --------
+    - name: Get CPU requests (cores)
+      shell: |
+        curl -k -sG -H "Authorization: Bearer {{ token }}" \
+        --data-urlencode "query=sum(kube_pod_container_resource_requests{resource='cpu'})" \
+        "{{ prometheus_url }}/api/v1/query" | jq -r '.data.result[0].value[1] // "0"'
+      register: cpu_requests
+
+    - name: Get CPU limits (cores)
+      shell: |
+        curl -k -sG -H "Authorization: Bearer {{ token }}" \
+        --data-urlencode "query=sum(kube_pod_container_resource_limits{resource='cpu'})" \
+        "{{ prometheus_url }}/api/v1/query" | jq -r '.data.result[0].value[1] // "0"'
+      register: cpu_limits
+
+    - name: Get Memory requests (bytes)
+      shell: |
+        curl -k -sG -H "Authorization: Bearer {{ token }}" \
+        --data-urlencode "query=sum(kube_pod_container_resource_requests{resource='memory'})" \
+        "{{ prometheus_url }}/api/v1/query" | jq -r '.data.result[0].value[1] // "0"'
+      register: mem_requests
+
+    - name: Get Memory limits (bytes)
+      shell: |
+        curl -k -sG -H "Authorization: Bearer {{ token }}" \
+        --data-urlencode "query=sum(kube_pod_container_resource_limits{resource='memory'})" \
+        "{{ prometheus_url }}/api/v1/query" | jq -r '.data.result[0].value[1] // "0"'
+      register: mem_limits
+
+    - name: Get PVC requested storage (bytes)
+      shell: |
+        curl -k -sG -H "Authorization: Bearer {{ token }}" \
+        --data-urlencode "query=sum(kube_persistentvolumeclaim_resource_requests_storage_bytes)" \
+        "{{ prometheus_url }}/api/v1/query" | jq -r '.data.result[0].value[1] // "0"'
+      register: storage_requests
+
+    # -------- Write human-readable report with % --------
+    - name: Write utilization report
+      blockinfile:
+        path: "{{ report_file }}"
+        marker: ""
+        block: |
+          CPU
+            Capacity        : {{ (cpu_capacity.stdout | float) | round(3) }} cores
+            Usage (now)     : {{ (cpu_usage.stdout | float) | round(3) }} cores  ({{ (100.0 * (cpu_usage.stdout | float) / ((cpu_capacity.stdout | float) if (cpu_capacity.stdout | float) > 0 else 1.0)) | round(2) }}%)
+            Requests (sum)  : {{ (cpu_requests.stdout | float) | round(3) }} cores  ({{ (100.0 * (cpu_requests.stdout | float) / ((cpu_capacity.stdout | float) if (cpu_capacity.stdout | float) > 0 else 1.0)) | round(2) }}%)
+            Limits (sum)    : {{ (cpu_limits.stdout | float) | round(3) }} cores  ({{ (100.0 * (cpu_limits.stdout | float) / ((cpu_capacity.stdout | float) if (cpu_capacity.stdout | float) > 0 else 1.0)) | round(2) }}%)
+            Efficiency
+              Usage / Requests: {{ (100.0 * (cpu_usage.stdout | float) / (((cpu_requests.stdout | float) if (cpu_requests.stdout | float) > 0 else 1.0))) | round(2) }}%
+              Usage / Limits  : {{ (100.0 * (cpu_usage.stdout | float) / (((cpu_limits.stdout | float) if (cpu_limits.stdout | float) > 0 else 1.0))) | round(2) }}%
+
+          Memory
+            Capacity        : {{ ((mem_capacity.stdout | float) / 1073741824) | round(2) }} GiB
+            Usage (now)     : {{ ((mem_usage.stdout | float)    / 1073741824) | round(2) }} GiB  ({{ (100.0 * (mem_usage.stdout | float) / ((mem_capacity.stdout | float) if (mem_capacity.stdout | float) > 0 else 1.0)) | round(2) }}%)
+            Requests (sum)  : {{ ((mem_requests.stdout | float) / 1073741824) | round(2) }} GiB  ({{ (100.0 * (mem_requests.stdout | float) / ((mem_capacity.stdout | float) if (mem_capacity.stdout | float) > 0 else 1.0)) | round(2) }}%)
+            Limits (sum)    : {{ ((mem_limits.stdout | float)   / 1073741824) | round(2) }} GiB  ({{ (100.0 * (mem_limits.stdout | float) / ((mem_capacity.stdout | float) if (mem_capacity.stdout | float) > 0 else 1.0)) | round(2) }}%)
+            Efficiency
+              Usage / Requests: {{ (100.0 * (mem_usage.stdout | float) / (((mem_requests.stdout | float) if (mem_requests.stdout | float) > 0 else 1.0))) | round(2) }}%
+              Usage / Limits  : {{ (100.0 * (mem_usage.stdout | float) / (((mem_limits.stdout | float)   if (mem_limits.stdout   | float) > 0 else 1.0))) | round(2) }}%
+
+          Storage
+            PV Capacity      : {{ ((storage_capacity.stdout | float) / 1073741824) | round(2) }} GiB
+            PVC Requests     : {{ ((storage_requests.stdout | float) / 1073741824) | round(2) }} GiB  ({{ (100.0 * (storage_requests.stdout | float) / ((storage_capacity.stdout | float) if (storage_capacity.stdout | float) > 0 else 1.0)) | round(2) }}%)
+            Usage (PV used)  : {{ ((storage_usage.stdout   | float) / 1073741824) | round(2) }} GiB  ({{ (100.0 * (storage_usage.stdout   | float) / ((storage_capacity.stdout | float) if (storage_capacity.stdout | float) > 0 else 1.0)) | round(2) }}%)
+            Notes            : Kubernetes does not define per-container "storage limits"; compare PVC requests and usage against PV capacity.
+
+          Overcommit Snapshot
+            CPU:   Requests {{ (100.0 * (cpu_requests.stdout | float) / ((cpu_capacity.stdout | float) if (cpu_capacity.stdout | float) > 0 else 1.0)) | round(2) }}% | Limits {{ (100.0 * (cpu_limits.stdout | float) / ((cpu_capacity.stdout | float) if (cpu_capacity.stdout | float) > 0 else 1.0)) | round(2) }}%
+            Memory: Requests {{ (100.0 * (mem_requests.stdout | float) / ((mem_capacity.stdout | float) if (mem_capacity.stdout | float) > 0 else 1.0)) | round(2) }}% | Limits {{ (100.0 * (mem_limits.stdout | float) / ((mem_capacity.stdout | float) if (mem_capacity.stdout | float) > 0 else 1.0)) | round(2) }}%
+
+    - name: Show final report path
+      debug:
+        msg: "✅ Utilization report generated at: {{ report_file }}"

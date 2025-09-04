@@ -1,0 +1,5 @@
+Service Availability Report (Last 30 days)
+-----------------------------------------------------
+apiserver => 100 %
+scheduler => 100 %
+kube-controller-manager => 100 %
