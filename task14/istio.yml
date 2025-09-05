@@ -1,0 +1,112 @@
+---
+- name: Install and Configure OpenShift Service Mesh 3.x with Defaults
+  hosts: localhost
+  gather_facts: no
+  vars:
+    operator_namespace: "openshift-operators"
+    istio_system_ns: "istio-system"
+    istio_cni_ns: "istio-cni"
+    inject_namespaces:
+      - default
+    enable_bookinfo: false
+
+  tasks:
+    - name: Install Service Mesh Operator v3 (Subscription)
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ operator_namespace }}"
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: servicemeshoperator3
+            namespace: "{{ operator_namespace }}"
+          spec:
+            channel: stable
+            name: servicemeshoperator3
+            source: redhat-operators
+            sourceNamespace: openshift-marketplace
+            installPlanApproval: Automatic
+            startingCSV: servicemeshoperator3.v3.1.1
+
+    - name: Create istio-system namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ istio_system_ns }}"
+        state: present
+
+    - name: Deploy Istio control plane (default)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: sailoperator.io/v1
+          kind: Istio
+          metadata:
+            name: default
+            namespace: "{{ istio_system_ns }}"
+          spec:
+            namespace: "{{ istio_system_ns }}"
+
+    - name: Create Istio CNI namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ istio_cni_ns }}"
+        state: present
+
+    - name: Deploy Istio CNI
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: sailoperator.io/v1
+          kind: IstioCNI
+          metadata:
+            name: default
+            namespace: "{{ istio_cni_ns }}"
+          spec: {}
+
+    - name: Label namespaces for sidecar injection
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ item }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ item }}"
+            labels:
+              istio-discovery: "enabled"
+              istio-injection: "enabled"
+      loop: "{{ inject_namespaces }}"
+
+    - name: Show completion message
+      debug:
+        msg: "✅ OpenShift Service Mesh 3.x installed with defaults. Istio in {{ istio_system_ns }}, CNI in {{ istio_cni_ns }}."
+    - name: Apply default PeerAuthentication (STRICT mTLS)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: security.istio.io/v1beta1
+          kind: PeerAuthentication
+          metadata:
+            name: default
+            namespace: "{{ item }}"
+          spec:
+            mtls:
+              mode: STRICT
+      loop: "{{ inject_namespaces }}"
+
+    - name: Apply default AuthorizationPolicy (deny all)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: security.istio.io/v1beta1
+          kind: AuthorizationPolicy
+          metadata:
+            name: default-deny
+            namespace: "{{ item }}"
+          spec: {}
+      loop: "{{ inject_namespaces }}"
