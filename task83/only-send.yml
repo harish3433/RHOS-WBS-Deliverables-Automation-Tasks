@@ -1,0 +1,32 @@
+- name: Send report via Gmail SMTP
+  hosts: localhost
+  gather_facts: no
+  vars:
+    report_file: "service_availability_report_{{ lookup('pipe','date +%F') }}.txt"
+    email_to: "harishnarnaware75@gmail.com"
+    email_from: "amrutambakare@gmail.com"
+    smtp_host: "smtp.gmail.com"
+    smtp_port: 587
+    smtp_user: "amrutambakare@gmail.com"
+    smtp_password: "cyprgrwwfdtzfrwj"   # Gmail App Password
+
+  tasks:
+    - name: Send report via Gmail
+      community.general.mail:
+        host: "{{ smtp_host }}"
+        port: "{{ smtp_port }}"
+        username: "{{ smtp_user }}"
+        password: "{{ smtp_password }}"
+        to: "{{ email_to }}"
+        from: "{{ email_from }}"
+        subject: "Kubernetes Service Availability Report - {{ lookup('pipe','date +%F') }}"
+        body: |
+          Hello Team,
+
+          Please find attached the availability report for key Kubernetes services.
+
+          Regards,
+          Monitoring Automation
+        attach:
+          - "{{ report_file }}"
+        secure: starttls
