@@ -1,0 +1,35 @@
+---
+- name: OpenShift Health Check
+  hosts: localhost
+  gather_facts: no
+  
+  tasks:
+    - name: Check cluster operators
+      k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterOperator
+      register: cluster_operators
+      
+    - name: Identify degraded operators
+      set_fact:
+        degraded_operators: "{{ cluster_operators.resources | 
+                             json_query('[?status.conditions[?type==`Degraded` && status==`True`]].metadata.name') }}"
+    
+    - name: Check etcd health
+      shell: oc get etcd -o jsonpath='{.items[0].status.conditions[?(@.type=="EtcdMembersAvailable")].status}'
+      register: etcd_status
+      
+    - name: Check API server availability
+      uri:
+        url: "https://api.prince-cluster.ocp02.demo:6443/healthz"
+        method: GET
+        validate_certs: no
+      register: api_health
+      ignore_errors: yes
+      
+    - name: Generate health report
+      debug:
+        msg:
+          - "Degraded Operators: {{ degraded_operators | join(', ') if degraded_operators else 'None' }}"
+          - "ETCD Status: {{ etcd_status.stdout | default('Unknown') }}"
+          - "API Server: {{ 'Healthy' if api_health.status|default(0) == 200 else 'Unhealthy' }}"

@@ -2,13 +2,6 @@
 
 ## 🚀 Steps to Run
 
-### 1. Save the Playbook
-Create a file:
-
-```bash
-vim k8s_availability_report.yml
-
-
 
 Ensure Ansible is installed
 
@@ -20,7 +13,7 @@ ansible-galaxy collection install community.general
 
 
 Validate the playbook:
-ansible-playbook k8s_availability_report.yml --check
+ansible-playbook odf-ansible-script.yaml --check
 
 Execute the Playbook
-ansible-playbook k8s_availability_report.yml
+ansible-playbook odf-ansible-script.yaml

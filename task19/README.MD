@@ -2,25 +2,19 @@
 
 ## 🚀 Steps to Run
 
-### 1. Save the Playbook
-Create a file:
-
-```bash
-vim k8s_availability_report.yml
 
 
-
-Ensure Ansible is installed
+step 1. Ensure Ansible is installed
 
 ansible --version
 
-Install the required collection
+step2. Install the required collection
 ansible-galaxy collection install community.general
 
 
 
-Validate the playbook:
-ansible-playbook k8s_availability_report.yml --check
+step3. Validate the playbook:
+ansible-playbook acs_install_integration.yml --check
 
 Execute the Playbook
-ansible-playbook k8s_availability_report.yml
+ansible-playbook acs_install_integration.yml

@@ -1,0 +1,235 @@
+---
+- name: Install Red Hat ACS on OpenShift + Integrate Docker Registry
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars:
+    namespace: rhacs-operator
+    central_port: "443"
+    creds_file: "./acs-login-details.txt"
+    token_file: "./acs-api-token.txt"
+
+  tasks:
+
+    - name: Ensure namespace exists
+      kubernetes.core.k8s:
+        state: present
+        api_version: v1
+        kind: Namespace
+        name: "{{ namespace }}"
+
+    - name: Create OperatorGroup
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1
+          kind: OperatorGroup
+          metadata:
+            name: rhacs-operator-group
+            namespace: "{{ namespace }}"
+          spec: {}
+
+    - name: Create Subscription for ACS Operator
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: rhacs-operator-subscription
+            namespace: "{{ namespace }}"
+          spec:
+            channel: stable
+            name: rhacs-operator
+            source: redhat-operators
+            sourceNamespace: openshift-marketplace
+            installPlanApproval: Automatic
+
+    - name: Wait for ACS Operator CSV to succeed
+      shell: |
+        for i in {1..60}; do
+          PHASES=$(oc get csv -n {{ namespace }} -o jsonpath='{.items[*].status.phase}')
+          if echo "$PHASES" | grep -q "Succeeded"; then
+            echo "Succeeded"
+            exit 0
+          fi
+          echo "Waiting for ACS Operator... (Current: $PHASES)"
+          sleep 20
+        done
+        echo "Operator installation timed out"
+        exit 1
+      register: operator_status
+      changed_when: false
+
+    - name: Deploy Central instance
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: platform.stackrox.io/v1alpha1
+          kind: Central
+          metadata:
+            name: stackrox-central-services
+            namespace: "{{ namespace }}"
+          spec:
+            central:
+              exposure:
+                route:
+                  enabled: true
+                  reencrypt:
+                    enabled: false
+            scannerV4:
+              indexer:
+                scaling:
+                  replicas: 1
+              matcher:
+                scaling:
+                  replicas: 1
+
+    - name: Wait for Central route (dynamic lookup)
+      kubernetes.core.k8s_info:
+        api_version: route.openshift.io/v1
+        kind: Route
+        namespace: "{{ namespace }}"
+        name: central
+      register: central_route_info
+      until: central_route_info.resources | length > 0
+      retries: 60
+      delay: 20
+
+    - name: Set Central host fact
+      set_fact:
+        central_host: "{{ central_route_info.resources[0].spec.host }}"
+
+    - name: Get Central admin password secret
+      shell: >
+        oc get secret central-htpasswd -n {{ namespace }}
+        -o jsonpath='{.data.password}' | base64 --decode
+      register: central_password
+      changed_when: false
+
+    - name: Get Central admin username
+      set_fact:
+        central_username: "admin"
+
+    - name: Get cluster ingress IP
+      shell: oc get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'
+      register: ingress_ip
+      changed_when: false
+
+    - name: Show Central login details (pretty print)
+      debug:
+        msg:
+          - "✅ ACS Central is now deployed!"
+          - "🌐 URL: https://{{ central_host }}"
+          - "👤 Username: {{ central_username }}"
+          - "🔑 Password: {{ central_password.stdout }}"
+          - "🖥️ If DNS resolution fails, add this to /etc/hosts:"
+          - "{{ ingress_ip.stdout }}    {{ central_host }}"
+          - ""
+          - "Next steps:"
+          - "1. Open the URL in your browser and log in with the above credentials."
+          - "2. If automatic token generation fails, create an API Token in the UI."
+          - "3. Return and paste the token when prompted."
+
+    - name: Save login details to local file
+      copy:
+        dest: "{{ creds_file }}"
+        content: |
+          ✅ ACS Central Login Details
+          ------------------------------------
+          🌐 URL: https://{{ central_host }}
+          👤 Username: {{ central_username }}
+          🔑 Password: {{ central_password.stdout }}
+
+          🖥️ Add to /etc/hosts if needed:
+          {{ ingress_ip.stdout }}    {{ central_host }}
+
+          Next steps:
+          1. Open the URL in browser and login.
+          2. If automatic token generation fails, create an API Token in the UI.
+          3. Paste the token when prompted.
+
+    - name: Try to auto-generate API token
+      uri:
+        url: "https://{{ central_host }}:{{ central_port }}/v1/apitokens/generate"
+        method: POST
+        user: "{{ central_username }}"
+        password: "{{ central_password.stdout }}"
+        force_basic_auth: yes
+        body_format: json
+        body:
+          name: "ansible-automation"
+          role: "Admin"
+        status_code: 200
+        validate_certs: no
+      register: generated_token
+      ignore_errors: yes
+
+    - name: Save API token to file if generated
+      copy:
+        dest: "{{ token_file }}"
+        content: |
+          🔑 ACS API Token
+          --------------------
+          {{ generated_token.json.token | default("Token not generated, please create manually in UI") }}
+      when: generated_token is defined
+
+    - name: Set API token fact (fallback to prompt if not generated)
+      set_fact:
+        acs_api_token: "{{ generated_token.json.token | default('') }}"
+
+    - name: Prompt user for ACS API token (if auto-generation failed)
+      pause:
+        prompt: |
+          🔑 Auto token creation failed.
+          Please create an Admin API Token in the UI (Platform Configuration → Integrations → API Token)
+          and paste it here:
+      register: acs_api_token_input
+      when: acs_api_token == ""
+
+    - name: Override token fact if entered manually
+      set_fact:
+        acs_api_token: "{{ acs_api_token_input.user_input }}"
+      when: acs_api_token == ""
+
+    # --- DockerHub Integration ---
+    - name: Prompt user for DockerHub username
+      pause:
+        prompt: |
+          👤 Enter your DockerHub username:
+      register: docker_user_input
+
+    - name: Prompt user for DockerHub password
+      pause:
+        prompt: |
+          🔑 Enter your DockerHub account password (not PAT):
+      register: docker_pass_input
+
+    - name: Create DockerHub registry integration in ACS
+      uri:
+        url: "https://{{ central_host }}:{{ central_port }}/v1/imageintegrations"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ acs_api_token }}"
+        body_format: json
+        body:
+          name: dockerhub
+          type: docker
+          categories: ["REGISTRY"]
+          docker:
+            endpoint: "index.docker.io"
+            username: "{{ docker_user_input.user_input }}"
+            password: "{{ docker_pass_input.user_input }}"
+        status_code: [200, 409]
+        validate_certs: no
+
+    - name: Restore default security policies (skip if unsupported)
+      uri:
+        url: "https://{{ central_host }}:{{ central_port }}/v1/policies/restore_defaults"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ acs_api_token }}"
+        status_code: 200
+        validate_certs: no
+      ignore_errors: yes

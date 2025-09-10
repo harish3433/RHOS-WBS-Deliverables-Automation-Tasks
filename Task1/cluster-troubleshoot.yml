@@ -1,0 +1,58 @@
+---
+- name: OpenShift Cluster Troubleshooting
+  hosts: localhost
+  gather_facts: no
+  vars:
+    namespace: "{{ target_namespace | default('openshift-monitoring') }}"
+    
+  tasks:
+    - name: Check cluster nodes status
+      k8s_info:
+        api_version: v1
+        kind: Node
+      register: nodes_status
+      
+    - name: Identify unhealthy nodes
+      set_fact:
+        unhealthy_nodes: "{{ nodes_status.resources | 
+                           json_query('[?status.conditions[?type==`Ready` && status==`False`]].metadata.name') }}"
+    
+    - name: Check failed pods
+      k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ namespace }}"
+        field_selectors:
+          - status.phase!=Running
+          - status.phase!=Succeeded
+      register: failed_pods
+      
+    - name: Restart failed pods
+      k8s:
+        state: absent
+        api_version: v1
+        kind: Pod
+        name: "{{ item.metadata.name }}"
+        namespace: "{{ item.metadata.namespace }}"
+      loop: "{{ failed_pods.resources }}"
+      when: failed_pods.resources | length > 0
+      
+    - name: Collect must-gather for unhealthy nodes
+      shell: |
+        oc adm must-gather --dest-dir=/tmp/must-gather-$(date +%Y%m%d-%H%M%S)
+      when: unhealthy_nodes | length > 0
+      
+    - name: Node remediation - drain and uncordon
+      block:
+        - name: Drain unhealthy node
+          shell: "oc adm drain {{ item }} --ignore-daemonsets --delete-emptydir-data --force"
+          loop: "{{ unhealthy_nodes }}"
+          
+        - name: Wait for node drain
+          pause:
+            seconds: 30
+            
+        - name: Uncordon node
+          shell: "oc adm uncordon {{ item }}"
+          loop: "{{ unhealthy_nodes }}"
+      when: unhealthy_nodes | length > 0 and remediate_nodes | default(false)
