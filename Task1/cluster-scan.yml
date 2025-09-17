@@ -1,0 +1,55 @@
+---
+- name: OpenShift Cluster Issue Scanner
+  hosts: localhost
+  gather_facts: no
+  
+  tasks:
+    - name: Get failing pods across all namespaces
+      shell: |
+        oc get pods --all-namespaces --no-headers | awk '
+        $4 != "Running" && $4 != "Completed" && $4 != "Succeeded" {
+          print $1 "/" $2 " - " $4
+        }'
+      register: failing_pods_output
+      
+    - name: Get unschedulable nodes
+      shell: |
+        oc get nodes --no-headers | awk '$2 == "NotReady" || $2 == "SchedulingDisabled" {print $1 " - " $2}'
+      register: problem_nodes_output
+      ignore_errors: yes
+      
+    - name: Combine all failing pods
+      set_fact:
+        all_failing_pods: "{{ failing_pods_output.stdout_lines | unique }}"
+        
+    - name: Display scan results
+      debug:
+        msg:
+          - "=== CLUSTER SCAN RESULTS ==="
+          - "Total Failing Pods: {{ all_failing_pods | length }}"
+          - "Problem Nodes: {{ problem_nodes_output.stdout_lines | length }}"
+          
+    - name: Show failing pods
+      debug:
+        msg: "{{ item }}"
+      loop: "{{ all_failing_pods }}"
+      when: all_failing_pods | length > 0
+      
+    - name: Show problem nodes
+      debug:
+        msg: "{{ item }}"
+      loop: "{{ problem_nodes_output.stdout_lines }}"
+      when: problem_nodes_output.stdout_lines | length > 0
+      
+    - name: Save results for remediation
+      copy:
+        content: |
+          failing_pods:
+          {% for pod in all_failing_pods %}
+            - "{{ pod }}"
+          {% endfor %}
+          problem_nodes:
+          {% for node in problem_nodes_output.stdout_lines %}
+            - "{{ node }}"
+          {% endfor %}
+        dest: /tmp/cluster-issues.yml

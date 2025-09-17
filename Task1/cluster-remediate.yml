@@ -1,0 +1,88 @@
+---
+- name: OpenShift Cluster Remediation
+  hosts: localhost
+  gather_facts: no
+  vars:
+    target_namespace: "{{ target_ns | default('') }}"
+    
+  tasks:
+    - name: Get current failing pods in target namespace
+      shell: |
+        oc get pods -n {{ target_namespace }} --no-headers | awk '
+        $3 != "Running" && $3 != "Completed" && $3 != "Succeeded" {
+          print $1 " - " $3
+        }'
+      register: current_failing_pods
+      when: target_namespace != ""
+      
+    - name: Parse current failing pods
+      set_fact:
+        pods_to_process: "{{ pods_to_process | default([]) + [{'namespace': target_namespace, 'pod': item.split(' - ')[0], 'status': item.split(' - ')[1]}] }}"
+      loop: "{{ current_failing_pods.stdout_lines | default([]) }}"
+      when: target_namespace != "" and current_failing_pods.stdout_lines | default([]) | length > 0
+      
+    - name: Display found pods
+      debug:
+        msg: "Found failing pod: {{ item.namespace }}/{{ item.pod }} - {{ item.status }}"
+      loop: "{{ pods_to_process | default([]) }}"
+      
+    - name: Get pod logs for troubleshooting
+      shell: "oc logs {{ item.pod }} -n {{ item.namespace }} --tail=10"
+      register: pod_logs
+      loop: "{{ pods_to_process | default([]) }}"
+      ignore_errors: yes
+      
+    - name: Display troubleshooting info
+      debug:
+        msg:
+          - "=== TROUBLESHOOTING {{ item.item.namespace }}/{{ item.item.pod }} ==="
+          - "Status: {{ item.item.status }}"
+          - "Recent Logs: {{ item.stdout_lines[-3:] | default(['No logs']) | join(' | ') }}"
+      loop: "{{ pod_logs.results | default([]) }}"
+      when: not item.skipped | default(false)
+      
+    - name: Restart failing pods
+      shell: "oc delete pod {{ item.pod }} -n {{ item.namespace }}"
+      loop: "{{ pods_to_process | default([]) }}"
+      when: item.status in ['CrashLoopBackOff', 'Error', 'ImagePullBackOff', 'ErrImagePull']
+      ignore_errors: yes
+      
+    - name: Check for problematic nodes
+      shell: |
+        oc get nodes --no-headers | awk '$2 ~ /SchedulingDisabled/ || $2 == "NotReady" {print $1 " - " $2}'
+      register: problem_nodes_output
+      
+    - name: Parse problematic nodes
+      set_fact:
+        problem_nodes: "{{ problem_nodes | default([]) + [{'name': item.split(' - ')[0], 'status': item.split(' - ')[1]}] }}"
+      loop: "{{ problem_nodes_output.stdout_lines | default([]) }}"
+      when: problem_nodes_output.stdout_lines | default([]) | length > 0
+      
+    - name: Display problematic nodes
+      debug:
+        msg: "Found problematic node: {{ item.name }} - {{ item.status }}"
+      loop: "{{ problem_nodes | default([]) }}"
+      when: problem_nodes | default([]) | length > 0
+      
+    - name: Uncordon SchedulingDisabled nodes
+      shell: "oc adm uncordon {{ item.name }}"
+      loop: "{{ problem_nodes | default([]) }}"
+      when: problem_nodes | default([]) | length > 0 and 'SchedulingDisabled' in item.status
+      ignore_errors: yes
+      
+    - name: Show node remediation actions
+      debug:
+        msg: "Uncordoned node: {{ item.name }}"
+      loop: "{{ problem_nodes | default([]) }}"
+      when: problem_nodes | default([]) | length > 0 and 'SchedulingDisabled' in item.status
+      
+    - name: Display NotReady nodes (manual intervention needed)
+      debug:
+        msg: "WARNING: Node {{ item.name }} is NotReady - requires manual investigation"
+      loop: "{{ problem_nodes | default([]) }}"
+      when: problem_nodes | default([]) | length > 0 and item.status == 'NotReady'
+      
+    - name: Skip node remediation message
+      debug:
+        msg: "No problematic nodes found - skipping node remediation"
+      when: problem_nodes | default([]) | length == 0

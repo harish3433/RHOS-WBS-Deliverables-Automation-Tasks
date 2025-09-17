@@ -1,0 +1,28 @@
+apiVersion: oadp.openshift.io/v1alpha1
+kind: DataProtectionApplication
+metadata:
+  name: oadp-dpa
+  namespace: openshift-adp
+spec:
+  configuration:
+    velero:
+      defaultPlugins:
+      - openshift
+      - aws
+    restic:
+      enable: true
+  backupLocations:
+  - velero:
+      provider: aws
+      default: true
+      credential:
+        name: cloud-credentials
+        key: cloud
+      config:
+        region: us-east-1
+        s3Url: https://s3.openshift-storage.svc:443
+        insecureSkipTLSVerify: "true"
+        s3ForcePathStyle: "true"
+      objectStorage:
+        bucket: oadp-backup-bucket-28bb37ad-93ef-434b-aaa1-a5b9e8b86316
+        prefix: velero

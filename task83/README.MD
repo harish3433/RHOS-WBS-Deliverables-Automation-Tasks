@@ -3,10 +3,6 @@
 ## 🚀 Steps to Run
 
 ### 1. Save the Playbook
-Create a file:
-
-```bash
-vim k8s_availability_report.yml
 
 
 
@@ -23,4 +19,6 @@ Validate the playbook:
 ansible-playbook k8s_availability_report.yml --check
 
 Execute the Playbook
-ansible-playbook k8s_availability_report.yml
+ansible-playbook report-and-mail.yml
+
+

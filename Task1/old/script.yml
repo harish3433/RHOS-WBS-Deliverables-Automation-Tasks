@@ -1,0 +1,62 @@
+---
+- name: Remediation playbook for CrashLoopBackOff pods and unhealthy nodes
+  hosts: localhost
+  gather_facts: no
+
+  tasks:
+    - name: Get pods in CrashLoopBackOff or Error (current namespace context)
+      shell: |
+        oc get pods --no-headers | awk '$3=="CrashLoopBackOff" || $3=="Error" {print $1}'
+      register: bad_pods
+      changed_when: bad_pods.stdout != ""
+
+    - name: Show CrashLoopBackOff or Error pods
+      debug:
+        msg: "Problematic pods: {{ bad_pods.stdout_lines }}"
+      when: bad_pods.stdout != ""
+
+    - name: Gather pod events before deletion
+      shell: |
+        echo "Events for pod: {{ item }}" && \
+        oc describe pod {{ item }} | grep -A5 "Events:" || true
+      loop: "{{ bad_pods.stdout_lines }}"
+      when: bad_pods.stdout != ""
+      register: pod_events
+      changed_when: false
+
+    - name: Display pod events
+      debug:
+        msg: "{{ item.stdout }}"
+      loop: "{{ pod_events.results }}"
+      when: bad_pods.stdout != ""
+
+    - name: Gather logs of the failing container
+      shell: |
+        oc logs {{ item }} --previous || true
+      loop: "{{ bad_pods.stdout_lines }}"
+      when: bad_pods.stdout != ""
+      register: pod_logs
+      changed_when: false
+
+    - name: Display pod logs
+      debug:
+        msg: "{{ item.stdout }}"
+      loop: "{{ pod_logs.results }}"
+      when: bad_pods.stdout != ""
+
+    - name: Delete problematic pods
+      shell: oc delete pod {{ item }}
+      loop: "{{ bad_pods.stdout_lines }}"
+      when: bad_pods.stdout != ""
+
+    - name: Check for cordoned nodes (SchedulingDisabled)
+      shell: |
+        oc get nodes --no-headers | awk '$2=="SchedulingDisabled" {print $1}'
+      register: cordoned_nodes
+      changed_when: cordoned_nodes.stdout != ""
+
+    - name: Show cordoned node warnings
+      debug:
+        msg: "⚠️ Node {{ item }} is cordoned (scheduling disabled)"
+      loop: "{{ cordoned_nodes.stdout_lines }}"
+      when: cordoned_nodes.stdout != ""

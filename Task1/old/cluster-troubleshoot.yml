@@ -3,7 +3,8 @@
   hosts: localhost
   gather_facts: no
   vars:
-    namespace: "{{ target_namespace | default('openshift-monitoring') }}"
+    # namespace: "{{ target_namespace | default('openshift-onitoring') }}"
+    namespace: "{{ target_namespace | default('default') }}"
     
   tasks:
     - name: Check cluster nodes status

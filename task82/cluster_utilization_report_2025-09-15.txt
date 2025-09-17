@@ -1,0 +1,38 @@
+Cluster Resource Utilization Report
+------------------------------------------------------------------
+Scope: All workloads (cluster-wide totals)
+Time:  2025-09-15T17:04:51+05:30
+Window (CPU rate): 5m
+Notes:
+  - CPU units are cores. Memory/Storage are bytes (GiB shown below).
+  - Storage has no "limits" concept; we show requests and usage vs PV capacity.
+------------------------------------------------------------------
+
+CPU
+  Capacity        : 208.0 cores
+  Usage (now)     : 8.718 cores  (4.19%)
+  Requests (sum)  : 76.974 cores  (37.01%)
+  Limits (sum)    : 71.59 cores  (34.42%)
+  Efficiency
+    Usage / Requests: 11.33%
+    Usage / Limits  : 12.18%
+
+Memory
+  Capacity        : 234.66 GiB
+  Usage (now)     : 112.36 GiB  (47.88%)
+  Requests (sum)  : 181.14 GiB  (77.19%)
+  Limits (sum)    : 140.38 GiB  (59.82%)
+  Efficiency
+    Usage / Requests: 62.03%
+    Usage / Limits  : 80.03%
+
+Storage
+  PV Capacity      : 2948.0 GiB
+  PVC Requests     : 1448.0 GiB  (49.12%)
+  Usage (PV used)  : 7.63 GiB  (0.26%)
+  Notes            : Kubernetes does not define per-container "storage limits"; compare PVC requests and usage against PV capacity.
+
+Overcommit Snapshot
+  CPU:   Requests 37.01% | Limits 34.42%
+  Memory: Requests 77.19% | Limits 59.82%
+

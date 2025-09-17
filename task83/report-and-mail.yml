@@ -11,12 +11,12 @@
       - scheduler
       - kube-controller-manager
     report_file: "service_availability_report_{{ lookup('pipe','date +%F') }}.txt"
-    email_to: "amrutambakare@gmail.com"
-    email_from: "amrutambakare@gmail.com"
-    smtp_host: "smtp.example.com"
+    email_to: "user@gmail.com"
+    email_from: "user@gmail.com"
+    smtp_host: "smtp.gmail.com"           # ✅ fixed
     smtp_port: 587
-    smtp_user: "amrutambakare@gmail.com"
-    smtp_password: "cyprgrwwfdtzfrwj"   # Best to store in Ansible Vault!
+    smtp_user: "user@gmail.com"
+    smtp_password: ""     # ✅ Gmail App Password
 
   tasks:
     - name: Init report file
@@ -64,3 +64,4 @@
           Monitoring Automation
         attach:
           - "{{ report_file }}"
+        secure: starttls
