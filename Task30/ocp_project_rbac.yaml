@@ -6,6 +6,9 @@
     project_name: myproject
     quota_cpu: "2"
     quota_mem: "4Gi"
+    rbac_kind: User        # Can be User or Group
+    rbac_user: developer   # Username or Group name
+    rbac_role: edit        # ClusterRole: admin/edit/view
   tasks:
     - name: Create Project (Namespace)
       kubernetes.core.k8s:
@@ -47,20 +50,20 @@
                   cpu: "250m"
                   memory: "128Mi"
 
-    - name: Bind admin role to user 'developer'
+    - name: Bind role to user/group
       kubernetes.core.k8s:
         state: present
         definition:
           apiVersion: rbac.authorization.k8s.io/v1
           kind: RoleBinding
           metadata:
-            name: admin-binding
+            name: "{{ project_name }}-rbac"
             namespace: "{{ project_name }}"
           subjects:
-            - kind: User
-              name: developer
+            - kind: "{{ rbac_kind }}"   # User or Group
+              name: "{{ rbac_user }}"   # developer or group name
               apiGroup: rbac.authorization.k8s.io
           roleRef:
             kind: ClusterRole
-            name: admin
+            name: "{{ rbac_role }}"     # admin/edit/view
             apiGroup: rbac.authorization.k8s.io

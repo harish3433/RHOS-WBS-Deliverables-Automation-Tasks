@@ -1,0 +1,32 @@
+---
+- name: Delete OpenShift Project
+  hosts: localhost
+  gather_facts: no
+  vars:
+    project_name: myproject
+
+  tasks:
+    - name: Check if project exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ project_name }}"
+      register: project_info
+      failed_when: false
+
+    - name: Delete project if it exists
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ project_name }}"
+      when: project_info.resources | length > 0
+
+    - name: Print status
+      debug:
+        msg: >-
+          {%- if project_info.resources | length > 0 -%}
+            Project '{{ project_name }}' deleted successfully.
+          {%- else -%}
+            Project '{{ project_name }}' does not exist.
+          {%- endif -%}
